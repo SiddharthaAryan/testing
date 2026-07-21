@@ -1,9 +1,18 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, Route, Routes, useNavigate } from 'react-router-dom';
-import { collection, doc, getDocs, orderBy, query, serverTimestamp, setDoc, updateDoc } from 'firebase/firestore';
+import { collection, doc, getDoc, getDocs, orderBy, query, serverTimestamp, setDoc, updateDoc } from 'firebase/firestore';
 import { onAuthStateChanged, signInWithEmailAndPassword, signOut } from 'firebase/auth';
 import { auth, db } from './firebase';
 import { downloadPdf, generateCertificatePdf } from './certificate';
+
+const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+
+const createInternalRecordKey = (year) => {
+  const bytes = new Uint8Array(10);
+  crypto.getRandomValues(bytes);
+  const code = Array.from(bytes, (n) => alphabet[n % alphabet.length]).join('');
+  return `NH-LD-${year}-${code}`;
+};
 
 const formatDate = (iso) => {
   const [year, month, day] = iso.split('-');
@@ -106,13 +115,24 @@ function Generate({ user }) {
       tomorrow.setHours(23, 59, 59, 999);
       if (selectedDate > tomorrow) throw new Error('The completion date cannot be in the future.');
 
+      let internalRecordKey;
+      for (let attempt = 0; attempt < 5; attempt += 1) {
+        const candidate = createInternalRecordKey(form.completionDate.slice(0, 4));
+        if (!(await getDoc(doc(db, 'certificates', candidate))).exists()) {
+          internalRecordKey = candidate;
+          break;
+        }
+      }
+      if (!internalRecordKey) throw new Error('Could not create the issue record. Please try again.');
+
       const record = {
+        certificateId: internalRecordKey,
         recipientName,
         courseName,
         completionDate: form.completionDate,
         displayDate: formatDate(form.completionDate),
         status: 'valid',
-        templateVersion: 'v2',
+        templateVersion: 'v1',
         issuedAt: serverTimestamp(),
         issuedBy: user.email,
         revokedAt: null,
@@ -120,8 +140,7 @@ function Generate({ user }) {
         revocationReason: null,
       };
 
-      const recordRef = doc(collection(db, 'certificates'));
-      await setDoc(recordRef, record);
+      await setDoc(doc(db, 'certificates', internalRecordKey), record);
       await makeAndDownloadPdf(record, openedWindow);
       setMessageType('success');
       setMessage('Certificate downloaded and opened successfully.');
