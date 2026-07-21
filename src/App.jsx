@@ -12,10 +12,16 @@ const formatDate = (iso) => {
 
 const safeFilename = (value) => value.replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, '');
 
-async function makeAndDownloadPdf(record) {
-  const verificationUrl = `${window.location.origin}/verify/${record.certificateId}`;
+async function makePdf(record) {
+  const verificationUrl = `${window.location.origin}${window.location.pathname}#/verify/${record.certificateId}`;
   const bytes = await generateCertificatePdf({ ...record, verificationUrl });
-  downloadPdf(bytes, `${record.certificateId}-${safeFilename(record.recipientName)}.pdf`);
+  const filename = `${record.certificateId}-${safeFilename(record.recipientName)}.pdf`;
+  return { bytes, filename };
+}
+
+async function makeAndDownloadPdf(record) {
+  const { bytes, filename } = await makePdf(record);
+  downloadPdf(bytes, filename);
 }
 
 function Layout({ children, user }) {
@@ -73,7 +79,12 @@ function Generate({ user }) {
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
   const [messageType, setMessageType] = useState('notice');
+  const [preview, setPreview] = useState(null);
   const change = (key) => (event) => setForm({ ...form, [key]: event.target.value });
+
+  useEffect(() => () => {
+    if (preview?.url) URL.revokeObjectURL(preview.url);
+  }, [preview]);
 
   const submit = async (event) => {
     event.preventDefault();
@@ -118,9 +129,14 @@ function Generate({ user }) {
       };
 
       await setDoc(doc(db, 'certificates', certificateId), record);
-      await makeAndDownloadPdf(record);
+      const { bytes, filename } = await makePdf(record);
+      const url = URL.createObjectURL(new Blob([bytes], { type: 'application/pdf' }));
+      setPreview((current) => {
+        if (current?.url) URL.revokeObjectURL(current.url);
+        return { url, bytes, filename, record };
+      });
       setMessageType('success');
-      setMessage(`Certificate generated, recorded and downloaded. ID: ${certificateId}`);
+      setMessage(`Certificate generated and recorded. Review the preview, then download it. ID: ${certificateId}`);
       setForm({ recipientName: '', courseName: '', completionDate: '' });
     } catch (error) {
       setMessageType('errorBox');
@@ -130,9 +146,9 @@ function Generate({ user }) {
     }
   };
 
-  return <section className="card">
+  return <section className="card generatorCard">
     <h1>Generate certificate</h1>
-    <p className="muted">The verification record is saved before the PDF is downloaded.</p>
+    <p className="muted">The verification record is saved first. A preview appears before you download the PDF.</p>
     <form onSubmit={submit}>
       <label>Recipient name<input maxLength="100" value={form.recipientName} onChange={change('recipientName')} placeholder="Full name as it should appear" required /></label>
       <label>Course name<textarea maxLength="180" value={form.courseName} onChange={change('courseName')} placeholder="Course or training programme" required /></label>
@@ -140,6 +156,17 @@ function Generate({ user }) {
       <button disabled={busy}>{busy ? 'Generating certificate…' : 'Generate certificate'}</button>
       {message && <p className={messageType}>{message}</p>}
     </form>
+
+    {preview && <section className="previewSection">
+      <div className="previewHeader">
+        <div><h2>Certificate preview</h2><p className="muted">Check the name, course, date, ID and QR placement before downloading.</p></div>
+        <div className="previewActions">
+          <a className="buttonLink secondary" href={preview.url} target="_blank" rel="noreferrer">Open full preview</a>
+          <button onClick={() => downloadPdf(preview.bytes, preview.filename)}>Download PDF</button>
+        </div>
+      </div>
+      <iframe className="pdfPreview" src={preview.url} title={`Preview of ${preview.record.certificateId}`} />
+    </section>}
   </section>;
 }
 
