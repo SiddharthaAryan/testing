@@ -34,7 +34,7 @@ function wrapLines(font, text, size, maxWidth, maxLines = 2) {
 }
 
 export async function generateCertificatePdf({ recipientName, courseName, displayDate, certificateId, verificationUrl }) {
-  const templateUrl = `${import.meta.env.BASE_URL}templates/certificate-template-v1.pdf?v=6`;
+  const templateUrl = `${import.meta.env.BASE_URL}certificate-template-v1.pdf.pdf?v=7`;
   const response = await fetch(templateUrl, { cache: 'no-store' });
   if (!response.ok) throw new Error('Certificate template is missing.');
 
