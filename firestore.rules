@@ -1,0 +1,24 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() { return request.auth != null; }
+    function validCertificate(data) {
+      return data.keys().hasAll(['certificateId','recipientName','courseName','completionDate','displayDate','status','templateVersion','issuedAt','issuedBy'])
+        && data.certificateId.matches('^NH-LD-[0-9]{4}-[A-Z2-9]{10}$')
+        && data.recipientName is string && data.recipientName.size() > 0 && data.recipientName.size() <= 100
+        && data.courseName is string && data.courseName.size() > 0 && data.courseName.size() <= 180
+        && data.status in ['valid','revoked'];
+    }
+
+    match /certificates/{certificateId} {
+      allow get: if true;
+      allow list: if signedIn();
+      allow create: if signedIn() && certificateId == request.resource.data.certificateId && validCertificate(request.resource.data);
+      allow update: if signedIn()
+        && request.resource.data.certificateId == resource.data.certificateId
+        && request.resource.data.issuedAt == resource.data.issuedAt
+        && validCertificate(request.resource.data);
+      allow delete: if false;
+    }
+  }
+}
