@@ -20,7 +20,6 @@ function wrapLines(font, text, size, maxWidth, maxLines = 2) {
   const words = text.trim().split(/\s+/);
   const lines = [];
   let current = '';
-
   for (const word of words) {
     const candidate = current ? `${current} ${word}` : word;
     if (!current || font.widthOfTextAtSize(candidate, size) <= maxWidth) current = candidate;
@@ -29,14 +28,13 @@ function wrapLines(font, text, size, maxWidth, maxLines = 2) {
       current = word;
     }
   }
-
   if (current) lines.push(current);
   if (lines.length <= maxLines) return lines;
   return [lines[0], lines.slice(1).join(' ')];
 }
 
 export async function generateCertificatePdf({ recipientName, courseName, displayDate, certificateId, verificationUrl }) {
-  const templateUrl = `${import.meta.env.BASE_URL}templates/certificate-template-v1.pdf?v=5`;
+  const templateUrl = `${import.meta.env.BASE_URL}templates/certificate-template-v1.pdf?v=6`;
   const response = await fetch(templateUrl, { cache: 'no-store' });
   if (!response.ok) throw new Error('Certificate template is missing.');
 
@@ -53,37 +51,18 @@ export async function generateCertificatePdf({ recipientName, courseName, displa
   const muted = rgb(0.30, 0.30, 0.30);
   const navy = rgb(0.025, 0.105, 0.235);
 
-  /*
-   * Cover the entire original wording area in one pass. The panel deliberately
-   * extends above the old heading and below the old footer so no source text can
-   * remain visible. It stays inside the decorative frame and leaves the logos,
-   * navy border and gold corner artwork untouched.
-   */
   const panelX = width * 0.12;
   const panelY = height * 0.10;
   const panelW = width * 0.76;
   const panelH = height * 0.76;
 
-  page.drawRectangle({
-    x: panelX,
-    y: panelY,
-    width: panelW,
-    height: panelH,
-    color: white,
-  });
+  page.drawRectangle({ x: panelX, y: panelY, width: panelW, height: panelH, color: white });
 
   const centered = (text, y, font, size, color = ink) => {
     const textWidth = font.widthOfTextAtSize(text, size);
-    page.drawText(text, {
-      x: (width - textWidth) / 2,
-      y,
-      size,
-      font,
-      color,
-    });
+    page.drawText(text, { x: (width - textWidth) / 2, y, size, font, color });
   };
 
-  // Single heading only.
   centered('Certificate of Completion', height * 0.705, bold, 30, ink);
   centered('This is to certify that', height * 0.565, regular, 15.5);
 
@@ -94,83 +73,55 @@ export async function generateCertificatePdf({ recipientName, courseName, displa
 
   let courseSize = fitSize(italic, courseName, panelW * 0.72, 20, 12);
   let courseLines = wrapLines(italic, courseName, courseSize, panelW * 0.72, 2);
-
-  while (
-    courseLines.some((line) => italic.widthOfTextAtSize(line, courseSize) > panelW * 0.72)
-    && courseSize > 11.5
-  ) {
+  while (courseLines.some((line) => italic.widthOfTextAtSize(line, courseSize) > panelW * 0.72) && courseSize > 11.5) {
     courseSize -= 0.5;
     courseLines = wrapLines(italic, courseName, courseSize, panelW * 0.72, 2);
   }
 
   const courseStartY = courseLines.length === 1 ? height * 0.345 : height * 0.37;
-  courseLines.forEach((line, index) => {
-    centered(line, courseStartY - index * (courseSize + 5), italic, courseSize, ink);
-  });
+  courseLines.forEach((line, index) => centered(line, courseStartY - index * (courseSize + 5), italic, courseSize, ink));
 
   centered(`Completed on ${displayDate}`, height * 0.25, italic, 14.5);
 
   const footerLeft = panelX + 18;
   const footerBottom = panelY + 16;
-
   page.drawText(`Certificate ID: ${certificateId}`, {
-    x: footerLeft,
-    y: footerBottom + 14,
-    size: 8.4,
-    font: bold,
-    color: navy,
+    x: footerLeft, y: footerBottom + 14, size: 8.4, font: bold, color: navy,
   });
-
   page.drawText('Verify by scanning the QR code or entering this ID on the portal.', {
-    x: footerLeft,
-    y: footerBottom + 2,
-    size: 6.8,
-    font: regular,
-    color: muted,
+    x: footerLeft, y: footerBottom + 2, size: 6.8, font: regular, color: muted,
   });
 
   const qrDataUrl = await QRCode.toDataURL(verificationUrl, {
-    margin: 2,
-    width: 480,
-    errorCorrectionLevel: 'M',
+    margin: 2, width: 480, errorCorrectionLevel: 'M',
   });
-
   const qr = await pdf.embedPng(qrDataUrl);
   const qrSize = height * 0.095;
   const qrX = panelX + panelW - qrSize - 18;
   const qrY = panelY + 12;
-
-  page.drawRectangle({
-    x: qrX - 4,
-    y: qrY - 4,
-    width: qrSize + 8,
-    height: qrSize + 8,
-    color: white,
-  });
-
-  page.drawImage(qr, {
-    x: qrX,
-    y: qrY,
-    width: qrSize,
-    height: qrSize,
-  });
+  page.drawRectangle({ x: qrX - 4, y: qrY - 4, width: qrSize + 8, height: qrSize + 8, color: white });
+  page.drawImage(qr, { x: qrX, y: qrY, width: qrSize, height: qrSize });
 
   pdf.setTitle(`${recipientName} - ${courseName}`);
   pdf.setSubject(`Certificate ${certificateId}`);
   pdf.setKeywords(['certificate', certificateId, 'verification']);
-  pdf.setProducer('Certificate Verification Portal');
-
+  pdf.setProducer('Narayana Health Learning & Development');
   return pdf.save();
 }
 
-export function downloadPdf(bytes, filename) {
+export function downloadPdf(bytes, filename, openedWindow = null) {
   const blob = new Blob([bytes], { type: 'application/pdf' });
   const url = URL.createObjectURL(blob);
+
   const link = document.createElement('a');
   link.href = url;
   link.download = filename;
   document.body.appendChild(link);
   link.click();
   link.remove();
-  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+
+  if (openedWindow && !openedWindow.closed) openedWindow.location.href = url;
+  else window.open(url, '_blank', 'noopener,noreferrer');
+
+  window.setTimeout(() => URL.revokeObjectURL(url), 60000);
 }
