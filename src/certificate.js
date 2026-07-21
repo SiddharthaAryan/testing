@@ -31,7 +31,6 @@ function splitToLines(font, text, size, maxWidth, maxLines = 2) {
     }
   }
   if (current) lines.push(current);
-
   if (lines.length <= maxLines) return lines;
   return [lines.slice(0, maxLines - 1).join(' '), lines.slice(maxLines - 1).join(' ')];
 }
@@ -44,50 +43,66 @@ export async function generateCertificatePdf({ recipientName, courseName, displa
   const pdf = await PDFDocument.load(await response.arrayBuffer());
   const page = pdf.getPages()[0];
   const { width, height } = page.getSize();
-  const bold = await pdf.embedFont(StandardFonts.TimesRomanBold);
   const regular = await pdf.embedFont(StandardFonts.TimesRoman);
   const italic = await pdf.embedFont(StandardFonts.TimesRomanItalic);
+  const white = rgb(1, 1, 1);
+  const ink = rgb(0.08, 0.08, 0.08);
 
-  page.drawRectangle({
-    x: width * 0.18,
-    y: height * 0.16,
-    width: width * 0.68,
-    height: height * 0.67,
-    color: rgb(1, 1, 1),
-  });
+  // Remove only the old variable text. Keeping the rest of the original artwork
+  // untouched avoids the visible white "page pasted over the certificate" effect.
+  const cleanStrip = (x, y, w, h) => page.drawRectangle({ x, y, width: w, height: h, color: white });
+  cleanStrip(width * 0.25, height * 0.465, width * 0.50, height * 0.075); // old recipient
+  cleanStrip(width * 0.19, height * 0.315, width * 0.62, height * 0.105); // old course
+  cleanStrip(width * 0.35, height * 0.225, width * 0.30, height * 0.060); // old date
 
-  const centered = (text, y, font, size, color = rgb(0, 0, 0)) => {
+  const centered = (text, y, font, size, color = ink) => {
     const textWidth = font.widthOfTextAtSize(text, size);
     page.drawText(text, { x: (width - textWidth) / 2, y, size, font, color });
   };
 
-  centered('Certificate of Completion', height * 0.72, bold, fitSize(bold, 'Certificate of Completion', width * 0.58, 34, 25));
-  centered('This is to certify that', height * 0.56, regular, 18);
+  const nameSize = fitSize(italic, recipientName, width * 0.50, 25, 16);
+  centered(recipientName, height * 0.493, italic, nameSize);
 
-  const nameSize = fitSize(italic, recipientName, width * 0.55, 25, 16);
-  centered(recipientName, height * 0.505, italic, nameSize);
-  centered('has successfully completed the course', height * 0.445, regular, 17);
-
-  let courseSize = fitSize(italic, courseName, width * 0.69, 21, 13);
-  let courseLines = splitToLines(italic, courseName, courseSize, width * 0.69, 2);
-  while (courseLines.some((line) => italic.widthOfTextAtSize(line, courseSize) > width * 0.69) && courseSize > 12) {
+  let courseSize = fitSize(italic, courseName, width * 0.62, 20, 12.5);
+  let courseLines = splitToLines(italic, courseName, courseSize, width * 0.62, 2);
+  while (courseLines.some((line) => italic.widthOfTextAtSize(line, courseSize) > width * 0.62) && courseSize > 12) {
     courseSize -= 0.5;
-    courseLines = splitToLines(italic, courseName, courseSize, width * 0.69, 2);
+    courseLines = splitToLines(italic, courseName, courseSize, width * 0.62, 2);
   }
-  const courseStartY = courseLines.length === 1 ? height * 0.365 : height * 0.385;
+  const courseStartY = courseLines.length === 1 ? height * 0.357 : height * 0.377;
   courseLines.forEach((line, index) => centered(line, courseStartY - index * (courseSize + 4), italic, courseSize));
 
-  centered(`on ${displayDate}`, height * 0.255, italic, 18);
+  centered(`on ${displayDate}`, height * 0.245, italic, 17);
 
-  const footerY = Math.max(18, height * 0.045);
-  page.drawText(`Certificate ID: ${certificateId}`, { x: width * 0.08, y: footerY + 10, size: 7.5, font: regular, color: rgb(0.12, 0.12, 0.12) });
-  page.drawText('Verify authenticity using the QR code or certificate ID.', { x: width * 0.08, y: footerY, size: 6.5, font: regular, color: rgb(0.25, 0.25, 0.25) });
+  // Keep verification details inside the certificate's lower white area.
+  const footerY = height * 0.125;
+  const footerX = width * 0.15;
+  page.drawText(`Certificate ID: ${certificateId}`, {
+    x: footerX,
+    y: footerY + 10,
+    size: 7.2,
+    font: regular,
+    color: rgb(0.12, 0.12, 0.12),
+  });
+  page.drawText('Verify authenticity using the QR code or certificate ID.', {
+    x: footerX,
+    y: footerY,
+    size: 6.2,
+    font: regular,
+    color: rgb(0.28, 0.28, 0.28),
+  });
 
-  const qrDataUrl = await QRCode.toDataURL(verificationUrl, { margin: 1, width: 260, errorCorrectionLevel: 'M' });
+  const qrDataUrl = await QRCode.toDataURL(verificationUrl, {
+    margin: 1,
+    width: 300,
+    errorCorrectionLevel: 'M',
+  });
   const qr = await pdf.embedPng(qrDataUrl);
-  const qrSize = Math.min(56, height * 0.1);
-  page.drawRectangle({ x: width - qrSize - width * 0.055 - 3, y: footerY - 3, width: qrSize + 6, height: qrSize + 6, color: rgb(1, 1, 1) });
-  page.drawImage(qr, { x: width - qrSize - width * 0.055, y: footerY, width: qrSize, height: qrSize });
+  const qrSize = height * 0.082;
+  const qrX = width * 0.80;
+  const qrY = height * 0.105;
+  page.drawRectangle({ x: qrX - 3, y: qrY - 3, width: qrSize + 6, height: qrSize + 6, color: white });
+  page.drawImage(qr, { x: qrX, y: qrY, width: qrSize, height: qrSize });
 
   pdf.setTitle(`${recipientName} - ${courseName}`);
   pdf.setSubject(`Certificate ${certificateId}`);
