@@ -1,18 +1,10 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, Route, Routes, useNavigate } from 'react-router-dom';
-import { collection, doc, getDoc, getDocs, orderBy, query, serverTimestamp, setDoc, updateDoc } from 'firebase/firestore';
 import { onAuthStateChanged, signInWithEmailAndPassword, signOut } from 'firebase/auth';
-import { auth, db } from './firebase';
+import { auth } from './firebase';
 import { downloadPdf, generateCertificatePdf } from './certificate';
 
-const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-
-const createInternalRecordKey = (year) => {
-  const bytes = new Uint8Array(10);
-  crypto.getRandomValues(bytes);
-  const code = Array.from(bytes, (n) => alphabet[n % alphabet.length]).join('');
-  return `NH-LD-${year}-${code}`;
-};
+const STORAGE_KEY = 'nh-certificate-records-v1';
 
 const formatDate = (iso) => {
   const [year, month, day] = iso.split('-');
@@ -20,6 +12,16 @@ const formatDate = (iso) => {
 };
 
 const safeFilename = (value) => value.replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, '');
+
+const readRecords = () => {
+  try {
+    return JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]');
+  } catch {
+    return [];
+  }
+};
+
+const writeRecords = (records) => localStorage.setItem(STORAGE_KEY, JSON.stringify(records));
 
 async function makePdf(record) {
   const displayDate = record.completionDate ? formatDate(record.completionDate) : record.displayDate;
@@ -87,7 +89,7 @@ function Login() {
   </section>;
 }
 
-function Generate({ user }) {
+function Generate() {
   const [form, setForm] = useState({ recipientName: '', courseName: '', completionDate: '' });
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
@@ -115,33 +117,20 @@ function Generate({ user }) {
       tomorrow.setHours(23, 59, 59, 999);
       if (selectedDate > tomorrow) throw new Error('The completion date cannot be in the future.');
 
-      let internalRecordKey;
-      for (let attempt = 0; attempt < 5; attempt += 1) {
-        const candidate = createInternalRecordKey(form.completionDate.slice(0, 4));
-        if (!(await getDoc(doc(db, 'certificates', candidate))).exists()) {
-          internalRecordKey = candidate;
-          break;
-        }
-      }
-      if (!internalRecordKey) throw new Error('Could not create the issue record. Please try again.');
-
       const record = {
-        certificateId: internalRecordKey,
+        localId: crypto.randomUUID(),
         recipientName,
         courseName,
         completionDate: form.completionDate,
         displayDate: formatDate(form.completionDate),
         status: 'valid',
-        templateVersion: 'v1',
-        issuedAt: serverTimestamp(),
-        issuedBy: user.email,
-        revokedAt: null,
-        revokedBy: null,
-        revocationReason: null,
+        issuedAt: new Date().toISOString(),
       };
 
-      await setDoc(doc(db, 'certificates', internalRecordKey), record);
       await makeAndDownloadPdf(record, openedWindow);
+      const records = readRecords();
+      writeRecords([record, ...records]);
+
       setMessageType('success');
       setMessage('Certificate downloaded and opened successfully.');
       setForm({ recipientName: '', courseName: '', completionDate: '' });
@@ -182,7 +171,7 @@ function Generate({ user }) {
 }
 
 function exportCsv(rows) {
-  const columns = ['recipientName', 'courseName', 'completionDate', 'status', 'issuedBy', 'revocationReason'];
+  const columns = ['recipientName', 'courseName', 'completionDate', 'status'];
   const escape = (value) => `"${String(value ?? '').replaceAll('"', '""')}"`;
   const csv = [columns.join(','), ...rows.map((row) => columns.map((column) => escape(row[column])).join(','))].join('\n');
   const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
@@ -194,24 +183,17 @@ function exportCsv(rows) {
   window.setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
-function Dashboard({ user }) {
-  const [rows, setRows] = useState([]);
+function Dashboard() {
+  const [rows, setRows] = useState(readRecords());
   const [search, setSearch] = useState('');
   const [status, setStatus] = useState('all');
   const [course, setCourse] = useState('all');
   const [busyId, setBusyId] = useState('');
-  const [loadError, setLoadError] = useState('');
 
-  const load = async () => {
-    setLoadError('');
-    try {
-      const snapshots = await getDocs(query(collection(db, 'certificates'), orderBy('completionDate', 'desc')));
-      setRows(snapshots.docs.map((item) => ({ ...item.data(), docId: item.id })));
-    } catch {
-      setLoadError('Could not load certificate records. Check Firebase configuration and permissions.');
-    }
+  const saveRows = (next) => {
+    setRows(next);
+    writeRecords(next);
   };
-  useEffect(() => { load(); }, []);
 
   const courses = useMemo(() => [...new Set(rows.map((row) => row.courseName))].sort(), [rows]);
   const filtered = useMemo(() => rows.filter((row) => {
@@ -219,30 +201,19 @@ function Dashboard({ user }) {
     return matchesText && (status === 'all' || row.status === status) && (course === 'all' || row.courseName === course);
   }), [rows, search, status, course]);
 
-  const revoke = async (row) => {
+  const revoke = (row) => {
     const reason = window.prompt(`Enter the reason for revoking ${row.recipientName}'s certificate:`);
     if (!reason?.trim()) return;
-    setBusyId(row.docId);
-    await updateDoc(doc(db, 'certificates', row.docId), {
-      status: 'revoked', revocationReason: reason.trim(), revokedAt: serverTimestamp(), revokedBy: user.email,
-    });
-    await load();
-    setBusyId('');
+    saveRows(rows.map((item) => item.localId === row.localId ? { ...item, status: 'revoked', revocationReason: reason.trim() } : item));
   };
 
-  const restore = async (row) => {
-    if (!window.confirm(`Restore ${row.recipientName}'s certificate to valid status?`)) return;
-    setBusyId(row.docId);
-    await updateDoc(doc(db, 'certificates', row.docId), {
-      status: 'valid', revocationReason: null, revokedAt: null, revokedBy: null,
-    });
-    await load();
-    setBusyId('');
+  const restore = (row) => {
+    saveRows(rows.map((item) => item.localId === row.localId ? { ...item, status: 'valid', revocationReason: null } : item));
   };
 
   const regenerate = async (row) => {
     const openedWindow = window.open('', '_blank');
-    setBusyId(row.docId);
+    setBusyId(row.localId);
     try { await makeAndDownloadPdf(row, openedWindow); } finally { setBusyId(''); }
   };
 
@@ -251,7 +222,7 @@ function Dashboard({ user }) {
 
   return <section className="card wide">
     <div className="headingRow">
-      <div><div className="eyebrow">Administration</div><h1>Certificate dashboard</h1><p className="muted">Issue records and certificate downloads</p></div>
+      <div><div className="eyebrow">Administration</div><h1>Certificate dashboard</h1><p className="muted">Issue records stored securely on this device</p></div>
       <button className="secondary" onClick={() => exportCsv(filtered)} disabled={!filtered.length}>Export CSV</button>
     </div>
     <div className="stats">
@@ -265,20 +236,19 @@ function Dashboard({ user }) {
       <select value={course} onChange={(e) => setCourse(e.target.value)}><option value="all">All courses</option>{courses.map((item) => <option key={item}>{item}</option>)}</select>
       <select value={status} onChange={(e) => setStatus(e.target.value)}><option value="all">All statuses</option><option value="valid">Valid</option><option value="revoked">Revoked</option></select>
     </div>
-    {loadError && <p className="errorBox">{loadError}</p>}
     <p className="muted">Showing {filtered.length} of {rows.length} records</p>
     <div className="tableWrap">
       <table>
         <thead><tr><th>Name</th><th>Course</th><th>Date</th><th>Status</th><th>Actions</th></tr></thead>
         <tbody>
-          {filtered.map((row) => <tr key={row.docId}>
-            <td>{row.recipientName}</td><td>{row.courseName}</td><td>{row.completionDate ? formatDate(row.completionDate) : row.displayDate}</td>
+          {filtered.map((row) => <tr key={row.localId}>
+            <td>{row.recipientName}</td><td>{row.courseName}</td><td>{formatDate(row.completionDate)}</td>
             <td><span className={`badge ${row.status}`}>{row.status}</span></td>
             <td><div className="actions">
-              <button className="small secondary" disabled={busyId === row.docId} onClick={() => regenerate(row)}>PDF</button>
+              <button className="small secondary" disabled={busyId === row.localId} onClick={() => regenerate(row)}>PDF</button>
               {row.status === 'valid'
-                ? <button className="small danger" disabled={busyId === row.docId} onClick={() => revoke(row)}>Revoke</button>
-                : <button className="small" disabled={busyId === row.docId} onClick={() => restore(row)}>Restore</button>}
+                ? <button className="small danger" onClick={() => revoke(row)}>Revoke</button>
+                : <button className="small" onClick={() => restore(row)}>Restore</button>}
             </div></td>
           </tr>)}
           {!filtered.length && <tr><td colSpan="5" className="empty">No matching certificate records.</td></tr>}
@@ -294,9 +264,9 @@ export default function App() {
   if (user === undefined) return <main><p>Loading portal…</p></main>;
 
   return <Layout user={user}><Routes>
-    <Route path="/" element={user ? <Generate user={user} /> : <Login />} />
-    <Route path="/admin/login" element={user ? <Generate user={user} /> : <Login />} />
-    <Route path="/admin/generate" element={user ? <Generate user={user} /> : <Login />} />
-    <Route path="/admin/dashboard" element={user ? <Dashboard user={user} /> : <Login />} />
+    <Route path="/" element={user ? <Generate /> : <Login />} />
+    <Route path="/admin/login" element={user ? <Generate /> : <Login />} />
+    <Route path="/admin/generate" element={user ? <Generate /> : <Login />} />
+    <Route path="/admin/dashboard" element={user ? <Dashboard /> : <Login />} />
   </Routes></Layout>;
 }
