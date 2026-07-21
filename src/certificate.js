@@ -1,16 +1,6 @@
 import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
-import QRCode from 'qrcode';
 
-const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-
-export function createCertificateId(year) {
-  const bytes = new Uint8Array(10);
-  crypto.getRandomValues(bytes);
-  const code = Array.from(bytes, (n) => alphabet[n % alphabet.length]).join('');
-  return `NH-LD-${year}-${code}`;
-}
-
-function fitSize(font, text, maxWidth, initial, minimum = 12) {
+function fitSize(font, text, maxWidth, initial, minimum = 11) {
   let size = initial;
   while (size > minimum && font.widthOfTextAtSize(text, size) > maxWidth) size -= 0.5;
   return size;
@@ -20,6 +10,7 @@ function wrapLines(font, text, size, maxWidth, maxLines = 2) {
   const words = text.trim().split(/\s+/);
   const lines = [];
   let current = '';
+
   for (const word of words) {
     const candidate = current ? `${current} ${word}` : word;
     if (!current || font.widthOfTextAtSize(candidate, size) <= maxWidth) current = candidate;
@@ -28,21 +19,14 @@ function wrapLines(font, text, size, maxWidth, maxLines = 2) {
       current = word;
     }
   }
+
   if (current) lines.push(current);
   if (lines.length <= maxLines) return lines;
   return [lines[0], lines.slice(1).join(' ')];
 }
 
-function formatMmDdYyyy(completionDate, fallback = '') {
-  if (/^\d{4}-\d{2}-\d{2}$/.test(completionDate || '')) {
-    const [year, month, day] = completionDate.split('-');
-    return `${month}/${day}/${year}`;
-  }
-  return fallback;
-}
-
-export async function generateCertificatePdf({ recipientName, courseName, completionDate, displayDate, certificateId, verificationUrl }) {
-  const templateUrl = `${import.meta.env.BASE_URL}certificate-template-v1.pdf.pdf?v=8`;
+export async function generateCertificatePdf({ recipientName, courseName, displayDate }) {
+  const templateUrl = `${import.meta.env.BASE_URL}certificate-template-v1.pdf.pdf?v=9`;
   const response = await fetch(templateUrl, { cache: 'no-store' });
   if (!response.ok) throw new Error('Certificate template is missing.');
 
@@ -50,71 +34,52 @@ export async function generateCertificatePdf({ recipientName, courseName, comple
   const page = pdf.getPages()[0];
   const { width, height } = page.getSize();
 
+  // The sample certificate uses a classic Times New Roman-style serif treatment.
   const regular = await pdf.embedFont(StandardFonts.TimesRoman);
   const bold = await pdf.embedFont(StandardFonts.TimesRomanBold);
   const italic = await pdf.embedFont(StandardFonts.TimesRomanItalic);
+  const black = rgb(0, 0, 0);
 
-  const white = rgb(1, 1, 1);
-  const ink = rgb(0.06, 0.06, 0.06);
-  const muted = rgb(0.30, 0.30, 0.30);
-  const navy = rgb(0.025, 0.105, 0.235);
-
-  // The uploaded template is already blank. Do not place a large white panel over it,
-  // because that would cover the navy-and-gold artwork. These values only define the
-  // safe inner writing area.
-  const contentX = width * 0.17;
-  const contentY = height * 0.13;
-  const contentW = width * 0.66;
-
-  const centered = (text, y, font, size, color = ink) => {
+  const safeWidth = width * 0.69;
+  const centered = (text, y, font, size) => {
     const textWidth = font.widthOfTextAtSize(text, size);
-    page.drawText(text, { x: (width - textWidth) / 2, y, size, font, color });
+    page.drawText(text, {
+      x: (width - textWidth) / 2,
+      y,
+      size,
+      font,
+      color: black,
+    });
   };
 
-  centered('Certificate of Completion', height * 0.705, bold, 30, ink);
-  centered('This is to certify that', height * 0.565, regular, 15.5);
+  centered('Certificate of Completion', height * 0.70, bold, 34);
+  centered('This is to certify that', height * 0.555, regular, 17);
 
-  const nameSize = fitSize(bold, recipientName, contentW * 0.78, 25, 15);
-  centered(recipientName, height * 0.495, bold, nameSize, navy);
+  const nameSize = fitSize(italic, recipientName, safeWidth * 0.62, 19, 13);
+  centered(recipientName, height * 0.495, italic, nameSize);
 
-  centered('has successfully completed the course', height * 0.425, regular, 15.5);
+  centered('has successfully completed the course', height * 0.435, regular, 17);
 
-  let courseSize = fitSize(italic, courseName, contentW * 0.88, 20, 12);
-  let courseLines = wrapLines(italic, courseName, courseSize, contentW * 0.88, 2);
-  while (courseLines.some((line) => italic.widthOfTextAtSize(line, courseSize) > contentW * 0.88) && courseSize > 11.5) {
+  let courseSize = fitSize(italic, courseName, safeWidth, 21, 12);
+  let courseLines = wrapLines(italic, courseName, courseSize, safeWidth, 2);
+  while (courseLines.some((line) => italic.widthOfTextAtSize(line, courseSize) > safeWidth) && courseSize > 11.5) {
     courseSize -= 0.5;
-    courseLines = wrapLines(italic, courseName, courseSize, contentW * 0.88, 2);
+    courseLines = wrapLines(italic, courseName, courseSize, safeWidth, 2);
   }
 
-  const courseStartY = courseLines.length === 1 ? height * 0.345 : height * 0.37;
-  courseLines.forEach((line, index) => centered(line, courseStartY - index * (courseSize + 5), italic, courseSize, ink));
-
-  const finalDisplayDate = formatMmDdYyyy(completionDate, displayDate);
-  centered(`Completed on ${finalDisplayDate}`, height * 0.25, italic, 14.5);
-
-  const footerLeft = contentX + 10;
-  const footerBottom = contentY + 6;
-  page.drawText(`Certificate ID: ${certificateId}`, {
-    x: footerLeft, y: footerBottom + 14, size: 8.4, font: bold, color: navy,
-  });
-  page.drawText('Verify by scanning the QR code or entering this ID on the portal.', {
-    x: footerLeft, y: footerBottom + 2, size: 6.8, font: regular, color: muted,
+  const courseStartY = courseLines.length === 1 ? height * 0.355 : height * 0.375;
+  courseLines.forEach((line, index) => {
+    centered(line, courseStartY - index * (courseSize + 5), italic, courseSize);
   });
 
-  const qrDataUrl = await QRCode.toDataURL(verificationUrl, {
-    margin: 2, width: 480, errorCorrectionLevel: 'M',
-  });
-  const qr = await pdf.embedPng(qrDataUrl);
-  const qrSize = height * 0.09;
-  const qrX = contentX + contentW - qrSize - 10;
-  const qrY = contentY + 2;
-  page.drawRectangle({ x: qrX - 3, y: qrY - 3, width: qrSize + 6, height: qrSize + 6, color: white });
-  page.drawImage(qr, { x: qrX, y: qrY, width: qrSize, height: qrSize });
+  centered(`on ${displayDate} and this certificate will be`, height * 0.255, italic, 16);
+  centered('valid for one year from completion.', height * 0.205, italic, 16);
 
   pdf.setTitle(`${recipientName} - ${courseName}`);
-  pdf.setSubject(`Certificate ${certificateId}`);
-  pdf.setKeywords(['certificate', certificateId, 'verification']);
+  pdf.setSubject('Certificate of Completion');
+  pdf.setKeywords(['certificate', 'learning and development']);
   pdf.setProducer('Narayana Health Learning & Development');
+
   return pdf.save();
 }
 
