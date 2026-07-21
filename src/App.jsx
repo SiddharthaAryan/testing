@@ -19,25 +19,29 @@ async function makePdf(record) {
   return { bytes, filename };
 }
 
-async function makeAndDownloadPdf(record) {
+async function makeAndDownloadPdf(record, openedWindow = null) {
   const { bytes, filename } = await makePdf(record);
-  downloadPdf(bytes, filename);
+  downloadPdf(bytes, filename, openedWindow);
 }
 
 function Layout({ children, user }) {
   return <>
-    <header>
-      <div><strong>Certificate Portal</strong><span>Learning & Development</span></div>
+    <header className="siteHeader">
+      <Link className="brand" to="/">
+        <span className="brandMark">NH</span>
+        <span><strong>Narayana Health</strong><small>Learning & Development</small></span>
+      </Link>
       <nav>
-        <Link to="/verify">Verify</Link>
+        <Link to="/">Generate Certificate</Link>
+        <Link to="/verify">Verify Certificate</Link>
         {user ? <>
-          <Link to="/admin/generate">Generate</Link>
           <Link to="/admin/dashboard">Dashboard</Link>
           <button className="linkButton" onClick={() => signOut(auth)}>Sign out</button>
-        </> : <Link to="/admin/login">Admin</Link>}
+        </> : <Link to="/admin/login">Admin sign in</Link>}
       </nav>
     </header>
     <main>{children}</main>
+    <footer>MMI Narayana Health · Secure digital certificate portal</footer>
   </>;
 }
 
@@ -54,7 +58,7 @@ function Login() {
     setBusy(true);
     try {
       await signInWithEmailAndPassword(auth, email.trim(), password);
-      navigate('/admin/generate');
+      navigate('/');
     } catch {
       setError('Unable to sign in. Check the approved administrator account and password.');
     } finally {
@@ -62,14 +66,15 @@ function Login() {
     }
   };
 
-  return <section className="card narrow">
+  return <section className="card narrow authCard">
+    <div className="eyebrow">Authorised access</div>
     <h1>Administrator sign in</h1>
-    <p className="muted">Only authorised administrators can issue or change certificate records.</p>
+    <p className="muted">Sign in to issue, download and manage official certificates.</p>
     <form onSubmit={submit}>
       <label>Email<input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required /></label>
       <label>Password<input type="password" value={password} onChange={(e) => setPassword(e.target.value)} required /></label>
-      {error && <p className="error">{error}</p>}
-      <button disabled={busy}>{busy ? 'Signing in…' : 'Sign in'}</button>
+      {error && <p className="errorBox">{error}</p>}
+      <button disabled={busy}>{busy ? 'Signing in…' : 'Sign in securely'}</button>
     </form>
   </section>;
 }
@@ -79,15 +84,15 @@ function Generate({ user }) {
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
   const [messageType, setMessageType] = useState('notice');
-  const [preview, setPreview] = useState(null);
   const change = (key) => (event) => setForm({ ...form, [key]: event.target.value });
-
-  useEffect(() => () => {
-    if (preview?.url) URL.revokeObjectURL(preview.url);
-  }, [preview]);
 
   const submit = async (event) => {
     event.preventDefault();
+    const openedWindow = window.open('', '_blank');
+    if (openedWindow) {
+      openedWindow.document.write('<title>Preparing certificate…</title><p style="font-family:Arial;padding:32px">Preparing your certificate…</p>');
+    }
+
     setBusy(true);
     setMessage('');
     try {
@@ -129,16 +134,12 @@ function Generate({ user }) {
       };
 
       await setDoc(doc(db, 'certificates', certificateId), record);
-      const { bytes, filename } = await makePdf(record);
-      const url = URL.createObjectURL(new Blob([bytes], { type: 'application/pdf' }));
-      setPreview((current) => {
-        if (current?.url) URL.revokeObjectURL(current.url);
-        return { url, bytes, filename, record };
-      });
+      await makeAndDownloadPdf(record, openedWindow);
       setMessageType('success');
-      setMessage(`Certificate generated and recorded. Review the preview, then download it. ID: ${certificateId}`);
+      setMessage(`Certificate downloaded and opened successfully. Certificate ID: ${certificateId}`);
       setForm({ recipientName: '', courseName: '', completionDate: '' });
     } catch (error) {
+      if (openedWindow && !openedWindow.closed) openedWindow.close();
       setMessageType('errorBox');
       setMessage(error.message || 'Certificate generation failed.');
     } finally {
@@ -146,28 +147,31 @@ function Generate({ user }) {
     }
   };
 
-  return <section className="card generatorCard">
-    <h1>Generate certificate</h1>
-    <p className="muted">The verification record is saved first. A preview appears before you download the PDF.</p>
-    <form onSubmit={submit}>
-      <label>Recipient name<input maxLength="100" value={form.recipientName} onChange={change('recipientName')} placeholder="Full name as it should appear" required /></label>
-      <label>Course name<textarea maxLength="180" value={form.courseName} onChange={change('courseName')} placeholder="Course or training programme" required /></label>
-      <label>Completion date<input type="date" value={form.completionDate} onChange={change('completionDate')} required /></label>
-      <button disabled={busy}>{busy ? 'Generating certificate…' : 'Generate certificate'}</button>
-      {message && <p className={messageType}>{message}</p>}
-    </form>
-
-    {preview && <section className="previewSection">
-      <div className="previewHeader">
-        <div><h2>Certificate preview</h2><p className="muted">Check the name, course, date, ID and QR placement before downloading.</p></div>
-        <div className="previewActions">
-          <a className="buttonLink secondary" href={preview.url} target="_blank" rel="noreferrer">Open full preview</a>
-          <button onClick={() => downloadPdf(preview.bytes, preview.filename)}>Download PDF</button>
-        </div>
+  return <div className="pageGrid">
+    <section className="heroPanel">
+      <div className="eyebrow light">Official certificate portal</div>
+      <h1>Create verified certificates in seconds.</h1>
+      <p>Issue secure, QR-enabled certificates for learning and development programmes at Narayana Health.</p>
+      <div className="heroPoints">
+        <span>✓ Instant PDF download</span>
+        <span>✓ Automatic verification record</span>
+        <span>✓ Secure certificate ID</span>
       </div>
-      <iframe className="pdfPreview" src={preview.url} title={`Preview of ${preview.record.certificateId}`} />
-    </section>}
-  </section>;
+    </section>
+
+    <section className="card generatorCard">
+      <div className="eyebrow">Certificate generation</div>
+      <h2>Generate a certificate</h2>
+      <p className="muted">Enter the final approved details. The PDF will download and open automatically.</p>
+      <form onSubmit={submit}>
+        <label>Recipient name<input maxLength="100" value={form.recipientName} onChange={change('recipientName')} placeholder="Full name as it should appear" required /></label>
+        <label>Course name<textarea maxLength="180" value={form.courseName} onChange={change('courseName')} placeholder="Course or training programme" required /></label>
+        <label>Completion date<input type="date" value={form.completionDate} onChange={change('completionDate')} required /></label>
+        <button className="primaryAction" disabled={busy}>{busy ? 'Generating certificate…' : 'Generate & download certificate'}</button>
+        {message && <p className={messageType}>{message}</p>}
+      </form>
+    </section>
+  </div>;
 }
 
 function Verify() {
@@ -198,14 +202,15 @@ function Verify() {
 
   useEffect(() => { if (params.certificateId) verify(params.certificateId); }, [params.certificateId]);
 
-  return <section className="card">
+  return <section className="card verifyCard">
+    <div className="eyebrow">Public verification</div>
     <h1>Verify a certificate</h1>
-    <p className="muted">Enter the complete certificate ID printed at the bottom of the PDF.</p>
+    <p className="muted">Enter the complete certificate ID printed on the PDF.</p>
     <div className="inline">
       <input placeholder="NH-LD-2026-XXXXXXXXXX" value={id} onChange={(e) => setId(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && verify()} />
-      <button onClick={() => verify()}>Verify</button>
+      <button onClick={() => verify()}>Verify certificate</button>
     </div>
-    {state === 'loading' && <p>Checking certificate record…</p>}
+    {state === 'loading' && <p className="notice">Checking certificate record…</p>}
     {state === 'error' && <div className="result invalid"><h2>Verification unavailable</h2><p>Please try again shortly.</p></div>}
     {state === 'missing' && <div className="result invalid"><h2>No certificate found</h2><p>The ID does not match an issued certificate.</p></div>}
     {state === 'found' && <div className={`result ${record.status === 'valid' ? 'valid' : 'invalid'}`}>
@@ -282,8 +287,9 @@ function Dashboard({ user }) {
   };
 
   const regenerate = async (row) => {
+    const openedWindow = window.open('', '_blank');
     setBusyId(row.certificateId);
-    try { await makeAndDownloadPdf(row); } finally { setBusyId(''); }
+    try { await makeAndDownloadPdf(row, openedWindow); } finally { setBusyId(''); }
   };
 
   const validCount = rows.filter((row) => row.status === 'valid').length;
@@ -291,23 +297,20 @@ function Dashboard({ user }) {
 
   return <section className="card wide">
     <div className="headingRow">
-      <div><h1>Certificate dashboard</h1><p className="muted">Issue records, verification status and downloads</p></div>
+      <div><div className="eyebrow">Administration</div><h1>Certificate dashboard</h1><p className="muted">Issue records, verification status and downloads</p></div>
       <button className="secondary" onClick={() => exportCsv(filtered)} disabled={!filtered.length}>Export CSV</button>
     </div>
-
     <div className="stats">
       <div><strong>{rows.length}</strong><span>Total issued</span></div>
       <div><strong>{validCount}</strong><span>Valid</span></div>
       <div><strong>{revokedCount}</strong><span>Revoked</span></div>
       <div><strong>{courses.length}</strong><span>Courses</span></div>
     </div>
-
     <div className="filters">
       <input placeholder="Search name, course or certificate ID" value={search} onChange={(e) => setSearch(e.target.value)} />
       <select value={course} onChange={(e) => setCourse(e.target.value)}><option value="all">All courses</option>{courses.map((item) => <option key={item}>{item}</option>)}</select>
       <select value={status} onChange={(e) => setStatus(e.target.value)}><option value="all">All statuses</option><option value="valid">Valid</option><option value="revoked">Revoked</option></select>
     </div>
-
     {loadError && <p className="errorBox">{loadError}</p>}
     <p className="muted">Showing {filtered.length} of {rows.length} records</p>
     <div className="tableWrap">
@@ -338,7 +341,7 @@ export default function App() {
   if (user === undefined) return <main><p>Loading portal…</p></main>;
 
   return <Layout user={user}><Routes>
-    <Route path="/" element={<Verify />} />
+    <Route path="/" element={user ? <Generate user={user} /> : <Login />} />
     <Route path="/verify" element={<Verify />} />
     <Route path="/verify/:certificateId" element={<Verify />} />
     <Route path="/admin/login" element={user ? <Generate user={user} /> : <Login />} />
