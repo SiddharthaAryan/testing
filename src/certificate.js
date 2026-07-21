@@ -29,14 +29,15 @@ function wrapLines(font, text, size, maxWidth, maxLines = 2) {
       current = word;
     }
   }
+
   if (current) lines.push(current);
   if (lines.length <= maxLines) return lines;
   return [lines[0], lines.slice(1).join(' ')];
 }
 
 export async function generateCertificatePdf({ recipientName, courseName, displayDate, certificateId, verificationUrl }) {
-  const templateUrl = `${import.meta.env.BASE_URL}templates/certificate-template-v1.pdf`;
-  const response = await fetch(templateUrl);
+  const templateUrl = `${import.meta.env.BASE_URL}templates/certificate-template-v1.pdf?v=4`;
+  const response = await fetch(templateUrl, { cache: 'no-store' });
   if (!response.ok) throw new Error('Certificate template is missing.');
 
   const pdf = await PDFDocument.load(await response.arrayBuffer());
@@ -45,17 +46,22 @@ export async function generateCertificatePdf({ recipientName, courseName, displa
   const regular = await pdf.embedFont(StandardFonts.TimesRoman);
   const bold = await pdf.embedFont(StandardFonts.TimesRomanBold);
   const italic = await pdf.embedFont(StandardFonts.TimesRomanItalic);
-  const white = rgb(1, 1, 1);
-  const ink = rgb(0.07, 0.07, 0.07);
-  const muted = rgb(0.32, 0.32, 0.32);
-  const navy = rgb(0.03, 0.12, 0.27);
 
-  // Cover the entire original written-content region with one clean, flat-white panel.
-  // It stays inside the decorative frame, so logos, borders and gold/navy artwork remain untouched.
-  const panelX = width * 0.165;
-  const panelY = height * 0.145;
-  const panelW = width * 0.67;
-  const panelH = height * 0.59;
+  const white = rgb(1, 1, 1);
+  const ink = rgb(0.06, 0.06, 0.06);
+  const muted = rgb(0.31, 0.31, 0.31);
+  const navy = rgb(0.025, 0.105, 0.235);
+
+  /*
+   * The supplied template already contains sample wording. A single opaque white
+   * panel now covers the COMPLETE original text zone, including its old title,
+   * recipient, course and date. It remains inside the decorative frame and does
+   * not touch either logo, the navy border or the gold corner artwork.
+   */
+  const panelX = width * 0.145;
+  const panelY = height * 0.13;
+  const panelW = width * 0.71;
+  const panelH = height * 0.66;
   page.drawRectangle({ x: panelX, y: panelY, width: panelW, height: panelH, color: white });
 
   const centered = (text, y, font, size, color = ink) => {
@@ -63,50 +69,64 @@ export async function generateCertificatePdf({ recipientName, courseName, displa
     page.drawText(text, { x: (width - textWidth) / 2, y, size, font, color });
   };
 
-  centered('Certificate of Completion', height * 0.655, bold, 30, navy);
-  centered('This is to certify that', height * 0.535, regular, 15.5);
+  centered('Certificate of Completion', height * 0.68, bold, 29, navy);
+  centered('This is to certify that', height * 0.555, regular, 15);
 
-  const nameSize = fitSize(bold, recipientName, panelW * 0.76, 25, 15);
-  centered(recipientName, height * 0.465, bold, nameSize, navy);
+  const nameSize = fitSize(bold, recipientName, panelW * 0.72, 25, 15);
+  centered(recipientName, height * 0.49, bold, nameSize, navy);
 
-  centered('has successfully completed the course', height * 0.405, regular, 15.5);
+  centered('has successfully completed the course', height * 0.425, regular, 15);
 
-  let courseSize = fitSize(italic, courseName, panelW * 0.78, 20, 12);
+  let courseSize = fitSize(italic, courseName, panelW * 0.78, 19, 11.5);
   let courseLines = wrapLines(italic, courseName, courseSize, panelW * 0.78, 2);
-  while (courseLines.some((line) => italic.widthOfTextAtSize(line, courseSize) > panelW * 0.78) && courseSize > 11.5) {
+  while (courseLines.some((line) => italic.widthOfTextAtSize(line, courseSize) > panelW * 0.78) && courseSize > 11) {
     courseSize -= 0.5;
     courseLines = wrapLines(italic, courseName, courseSize, panelW * 0.78, 2);
   }
-  const courseStartY = courseLines.length === 1 ? height * 0.325 : height * 0.345;
-  courseLines.forEach((line, index) => centered(line, courseStartY - index * (courseSize + 4), italic, courseSize));
 
-  centered(`Completed on ${displayDate}`, height * 0.245, italic, 15);
-
-  const qrDataUrl = await QRCode.toDataURL(verificationUrl, {
-    margin: 2,
-    width: 320,
-    errorCorrectionLevel: 'M',
+  const courseStartY = courseLines.length === 1 ? height * 0.345 : height * 0.37;
+  courseLines.forEach((line, index) => {
+    centered(line, courseStartY - index * (courseSize + 4), italic, courseSize);
   });
-  const qr = await pdf.embedPng(qrDataUrl);
-  const qrSize = height * 0.062;
-  const qrX = panelX + panelW - qrSize - 10;
-  const qrY = panelY + 11;
+
+  centered(`Completed on ${displayDate}`, height * 0.255, italic, 14.5);
+
+  const footerLeft = panelX + 14;
+  const footerBottom = panelY + 13;
 
   page.drawText(`Certificate ID: ${certificateId}`, {
-    x: panelX + 16,
-    y: panelY + 30,
-    size: 7.3,
+    x: footerLeft,
+    y: footerBottom + 12,
+    size: 7.2,
     font: bold,
     color: navy,
   });
-  page.drawText('Verify at the portal or scan the QR code', {
-    x: panelX + 16,
-    y: panelY + 19,
-    size: 6.4,
+
+  page.drawText('Scan the QR code or enter this ID on the verification portal.', {
+    x: footerLeft,
+    y: footerBottom + 2,
+    size: 6.1,
     font: regular,
     color: muted,
   });
-  page.drawRectangle({ x: qrX - 2, y: qrY - 2, width: qrSize + 4, height: qrSize + 4, color: white });
+
+  const qrDataUrl = await QRCode.toDataURL(verificationUrl, {
+    margin: 2,
+    width: 360,
+    errorCorrectionLevel: 'M',
+  });
+  const qr = await pdf.embedPng(qrDataUrl);
+  const qrSize = height * 0.066;
+  const qrX = panelX + panelW - qrSize - 14;
+  const qrY = panelY + 10;
+
+  page.drawRectangle({
+    x: qrX - 3,
+    y: qrY - 3,
+    width: qrSize + 6,
+    height: qrSize + 6,
+    color: white,
+  });
   page.drawImage(qr, { x: qrX, y: qrY, width: qrSize, height: qrSize });
 
   pdf.setTitle(`${recipientName} - ${courseName}`);
