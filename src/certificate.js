@@ -37,7 +37,8 @@ function splitToLines(font, text, size, maxWidth, maxLines = 2) {
 }
 
 export async function generateCertificatePdf({ recipientName, courseName, displayDate, certificateId, verificationUrl }) {
-  const response = await fetch('/templates/certificate-template-v1.pdf');
+  const templateUrl = `${import.meta.env.BASE_URL}templates/certificate-template-v1.pdf`;
+  const response = await fetch(templateUrl);
   if (!response.ok) throw new Error('Certificate template is missing.');
 
   const pdf = await PDFDocument.load(await response.arrayBuffer());
@@ -47,8 +48,6 @@ export async function generateCertificatePdf({ recipientName, courseName, displa
   const regular = await pdf.embedFont(StandardFonts.TimesRoman);
   const italic = await pdf.embedFont(StandardFonts.TimesRomanItalic);
 
-  // The supplied template contains example text. This clean white panel removes
-  // only that text while retaining the original border, logos and artwork.
   page.drawRectangle({
     x: width * 0.18,
     y: height * 0.16,
