@@ -1,7 +1,7 @@
 {
-  "name": "certificate-verification-system",
+  "name": "certificate-generation-system",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.2.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -10,10 +10,8 @@
   },
   "dependencies": {
     "@vitejs/plugin-react": "latest",
-    "date-fns": "latest",
     "firebase": "latest",
     "pdf-lib": "latest",
-    "qrcode": "latest",
     "react": "latest",
     "react-dom": "latest",
     "react-router-dom": "latest"
